@@ -580,7 +580,60 @@ export class LoadBalancer extends DurableObject {
 					continue;
 				case 'assistant':
 					item.role = 'model';
+					// 处理 assistant 消息中的 tool_calls
+					if (item.tool_calls && Array.isArray(item.tool_calls)) {
+						const parts = [];
+						// 如果有文本内容，先添加文本
+						if (item.content) {
+							parts.push({ text: item.content });
+						}
+						// 添加函数调用
+						for (const toolCall of item.tool_calls) {
+							parts.push({
+								functionCall: {
+									name: toolCall.function?.name || toolCall.name,
+									args: typeof toolCall.function?.arguments === 'string' 
+										? JSON.parse(toolCall.function.arguments) 
+										: (toolCall.function?.arguments || toolCall.arguments || {}),
+								},
+							});
+						}
+						contents.push({
+							role: 'model',
+							parts,
+						});
+						continue;
+					}
 					break;
+				case 'tool':
+					// 将 tool 角色的消息转换为 function response
+					// tool 消息包含工具调用的结果
+					const functionResponse: any = {
+						functionResponse: {
+							name: item.name || item.tool_call_id,
+							response: {
+								content: item.content,
+							},
+						},
+					};
+					
+					// 查找上一条消息，如果是 model 角色且包含 functionCall，则合并
+					// 否则创建新的 user 消息
+					const lastContent = contents[contents.length - 1];
+					if (lastContent && lastContent.role === 'model') {
+						// 创建一个新的 user 消息来包含 function response
+						contents.push({
+							role: 'user',
+							parts: [functionResponse],
+						});
+					} else {
+						// 如果没有前置的 model 消息，也创建 user 消息
+						contents.push({
+							role: 'user',
+							parts: [functionResponse],
+						});
+					}
+					continue;
 				case 'user':
 					break;
 				default:
@@ -719,6 +772,7 @@ export class LoadBalancer extends DurableObject {
 			const message = { role: 'assistant', content: [] as string[] };
 			let reasoningContent = '';
 			let finalContent = '';
+			const toolCalls: any[] = [];
 
 			for (const part of cand.content?.parts ?? []) {
 				if (part.text) {
@@ -749,6 +803,18 @@ export class LoadBalancer extends DurableObject {
 						finalContent += part.text;
 					}
 				}
+				
+				// 处理函数调用
+				if (part.functionCall) {
+					toolCalls.push({
+						id: `call_${Math.random().toString(36).substring(2, 15)}`,
+						type: 'function',
+						function: {
+							name: part.functionCall.name,
+							arguments: JSON.stringify(part.functionCall.args || {}),
+						},
+					});
+				}
 			}
 
 			const messageObj: any = {
@@ -764,6 +830,15 @@ export class LoadBalancer extends DurableObject {
 			// 如果有思考内容，添加到响应中
 			if (reasoningContent) {
 				messageObj.message.reasoning_content = reasoningContent;
+			}
+			
+			// 如果有工具调用，添加到响应中
+			if (toolCalls.length > 0) {
+				messageObj.message.tool_calls = toolCalls;
+				// 当有工具调用时，finish_reason 应该是 tool_calls
+				if (!messageObj.finish_reason || messageObj.finish_reason === 'stop') {
+					messageObj.finish_reason = 'tool_calls';
+				}
 			}
 
 			return messageObj;
@@ -837,6 +912,7 @@ export class LoadBalancer extends DurableObject {
 				// 分别处理思考内容和正常内容
 				let reasoningText = '';
 				let finalText = '';
+				const functionCalls: any[] = [];
 
 				for (const part of parts) {
 					if (part.text) {
@@ -866,6 +942,18 @@ export class LoadBalancer extends DurableObject {
 							// 这是正常的回答内容
 							finalText += part.text;
 						}
+					}
+					
+					// 处理函数调用
+					if (part.functionCall) {
+						functionCalls.push({
+							id: `call_${Math.random().toString(36).substring(2, 15)}`,
+							type: 'function',
+							function: {
+								name: part.functionCall.name,
+								arguments: JSON.stringify(part.functionCall.args || {}),
+							},
+						});
 					}
 				}
 
@@ -951,9 +1039,37 @@ export class LoadBalancer extends DurableObject {
 						controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
 					}
 				}
+				
+				// 处理函数调用的流式输出
+				if (functionCalls.length > 0) {
+					for (const toolCall of functionCalls) {
+						const obj = {
+							id: this.id,
+							object: 'chat.completion.chunk',
+							created: Math.floor(Date.now() / 1000),
+							model: this.model,
+							choices: [
+								{
+									index,
+									delta: {
+										tool_calls: [toolCall],
+									},
+									finish_reason: null,
+								},
+							],
+						};
+						controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+					}
+				}
 
 				// 如果有完成原因，发送完成信号
 				if (finishReason) {
+					let mappedFinishReason = reasonsMap[finishReason] || finishReason;
+					// 如果有函数调用，finish_reason 应该是 tool_calls
+					if (functionCalls.length > 0 && mappedFinishReason === 'stop') {
+						mappedFinishReason = 'tool_calls';
+					}
+					
 					const finishObj = {
 						id: this.id,
 						object: 'chat.completion.chunk',
@@ -963,7 +1079,7 @@ export class LoadBalancer extends DurableObject {
 							{
 								index,
 								delta: {},
-								finish_reason: reasonsMap[finishReason] || finishReason,
+								finish_reason: mappedFinishReason,
 							},
 						],
 					};
