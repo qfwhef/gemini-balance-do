@@ -717,7 +717,7 @@ export class LoadBalancer extends DurableObject {
 		};
 	}
 
-	private adjustSchema(schema: any) {
+	private adjustSchema = (schema: any) => {
 		const obj = schema[schema.type];
 		delete obj.strict;
 		return this.adjustProps(schema);
