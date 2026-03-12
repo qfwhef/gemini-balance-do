@@ -723,7 +723,7 @@ export class LoadBalancer extends DurableObject {
 		return this.adjustProps(schema);
 	}
 
-	private adjustProps(schemaPart: any) {
+	private adjustProps = (schemaPart: any): void => {
 		if (typeof schemaPart !== 'object' || schemaPart === null) {
 			return;
 		}
