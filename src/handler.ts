@@ -684,7 +684,7 @@ export class LoadBalancer extends DurableObject {
 			}
 		}
 
-		if (content.every((item) => item.type === 'image_url')) {
+		if (content.every((item: any) => item.type === 'image_url')) {
 			parts.push({ text: '' }); // to avoid "Unable to submit request because it must have a text parameter"
 		}
 		return parts;
@@ -733,6 +733,23 @@ export class LoadBalancer extends DurableObject {
 			if (schemaPart.type === 'object' && schemaPart.properties && schemaPart.additionalProperties === false) {
 				delete schemaPart.additionalProperties;
 			}
+			// 移除 Gemini API 不支持的字段
+			delete schemaPart.patternProperties;
+			delete schemaPart.unevaluatedProperties;
+			delete schemaPart.propertyNames;
+			delete schemaPart.minProperties;
+			delete schemaPart.maxProperties;
+			delete schemaPart.dependentRequired;
+			delete schemaPart.dependentSchemas;
+			delete schemaPart.$schema;
+			delete schemaPart.$id;
+			delete schemaPart.$ref;
+			delete schemaPart.$defs;
+			delete schemaPart.allOf;
+			delete schemaPart.anyOf;
+			delete schemaPart.oneOf;
+			delete schemaPart.not;
+			
 			Object.values(schemaPart).forEach(this.adjustProps);
 		}
 	}
